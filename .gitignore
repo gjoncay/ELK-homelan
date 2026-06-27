@@ -3,6 +3,9 @@
 
 # Local notes
 *.local
+
+# Generated Dashboards
+dashboards/*.ndjson
 =======
 # Logs
 logs

@@ -230,7 +230,7 @@ services:
 
   # ---------------------------------------------------------------------------
   # kibana-ts: Tailscale sidecar giving Kibana its own tailnet node + URL:
-  #   https://kibana.dikdik-macaroni.ts.net  (tailnet-only, valid LE cert).
+  #   https://kibana.<tailnet-name>.ts.net  (tailnet-only, valid LE cert).
   # Shares kibana's network namespace, so it proxies to 127.0.0.1:5601 (Kibana's
   # own TLS port -> https+insecure). Independent of the host's `tailscale serve`.
   # ---------------------------------------------------------------------------
