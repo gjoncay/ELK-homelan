@@ -20,17 +20,23 @@ DV_TITLE = "logs-zeek.*"
 LAN = "192.168.88.0/24"
 
 # device.name runtime field: maps an internal source IP to a friendly name.
-# Seeded EMPTY -> emits the IP itself. Repopulate DEVICE_MAP from MikroTik DHCP
-# leases and re-import to light up friendly names retroactively across all data.
-DEVICE_MAP = {
-    "192.168.88.249": "RE450-Extender",
-    "192.168.88.253": "GrantsThinkpad",      # wired
-    "192.168.88.251": "GrantsThinkpad",      # same laptop, Wi-Fi
-    "192.168.88.246": "Sophies-Air",
-    "192.168.88.243": "iPhone",
-    "192.168.88.244": "Roku-TV",
-    "192.168.88.247": "LAPTOP-G92MLJII",
-}
+# Loaded from local devices.local configuration if present (which is ignored by Git).
+DEVICE_MAP = {}
+devices_file = os.path.join(os.path.dirname(__file__), "devices.local")
+if os.path.exists(devices_file):
+    try:
+        with open(devices_file, "r") as f:
+            DEVICE_MAP = json.load(f)
+    except Exception as e:
+        print(f"Warning: Failed to load local device map from {devices_file}: {e}")
+
+if not DEVICE_MAP:
+    # Generic template fallback if no local file exists
+    DEVICE_MAP = {
+        "192.168.88.251": "Laptop-1",
+        "192.168.88.244": "Smart-TV",
+    }
+
 def build_device_script(device_map):
     lines = [
         "if (!doc.containsKey('source.ip') || doc['source.ip'].size()==0) { emit('unknown'); return; }",
