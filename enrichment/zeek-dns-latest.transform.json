@@ -1,0 +1,15 @@
+{
+  "description": "Latest domain per resolved IP from Zeek dns.log. group_by terms fans out the dns.resolved_ip array to one row per answer IP; top_metrics keeps the most-recent dns.question.name. Entity-centric source for enrich policy zeek-dns-ip-to-domain. Output reshaped by pipeline zeek-dns-latest-shape.",
+  "source": { "index": ["logs-zeek.dns-*"] },
+  "pivot": {
+    "group_by": { "resolved_ip": { "terms": { "field": "dns.resolved_ip" } } },
+    "aggregations": {
+      "last_seen": { "max": { "field": "@timestamp" } },
+      "domain": { "top_metrics": { "metrics": { "field": "dns.question.name" }, "sort": { "@timestamp": "desc" } } }
+    }
+  },
+  "dest": { "index": "zeek-dns-latest", "pipeline": "zeek-dns-latest-shape" },
+  "frequency": "1m",
+  "sync": { "time": { "field": "@timestamp", "delay": "60s" } },
+  "settings": { "max_page_search_size": 500 }
+}

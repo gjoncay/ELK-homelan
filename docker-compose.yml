@@ -1,0 +1,315 @@
+# MikroTik -> ELK : Phase 1 (core stack + Fleet)
+# Adapted from Elastic's official "Stack + Docker Compose Part 2" example,
+# stripped to the services we need (no APM / Logstash / Beats / demo app).
+
+volumes:
+  certs:
+    driver: local
+  esdata01:
+    driver: local
+  kibanadata:
+    driver: local
+  fleetserverdata:
+    driver: local
+  kibanatsdata:
+    driver: local
+  # Zeek JSON logs: written by the `zeek` service, tailed by the agent
+  # (fleet-server) at /opt/zeek/logs/current — a default Zeek-integration path.
+  zeeklogs:
+    driver: local
+
+networks:
+  default:
+    name: elastic
+    external: false
+
+services:
+  # ---------------------------------------------------------------------------
+  # setup: generates a CA + per-service certs, sets the kibana_system password.
+  # Runs once and exits; everything else waits on its healthcheck.
+  # ---------------------------------------------------------------------------
+  setup:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    volumes:
+      - certs:/usr/share/elasticsearch/config/certs
+    user: "0"
+    command: >
+      bash -c '
+        if [ x${ELASTIC_PASSWORD} == x ]; then
+          echo "Set the ELASTIC_PASSWORD environment variable in the .env file";
+          exit 1;
+        elif [ x${KIBANA_PASSWORD} == x ]; then
+          echo "Set the KIBANA_PASSWORD environment variable in the .env file";
+          exit 1;
+        fi;
+        if [ ! -f config/certs/ca.zip ]; then
+          echo "Creating CA";
+          bin/elasticsearch-certutil ca --silent --pem -out config/certs/ca.zip;
+          unzip config/certs/ca.zip -d config/certs;
+        fi;
+        if [ ! -f config/certs/certs.zip ]; then
+          echo "Creating certs";
+          echo -ne \
+          "instances:\n"\
+          "  - name: es01\n"\
+          "    dns:\n"\
+          "      - es01\n"\
+          "      - localhost\n"\
+          "    ip:\n"\
+          "      - 127.0.0.1\n"\
+          "  - name: kibana\n"\
+          "    dns:\n"\
+          "      - kibana\n"\
+          "      - localhost\n"\
+          "    ip:\n"\
+          "      - 127.0.0.1\n"\
+          "  - name: fleet-server\n"\
+          "    dns:\n"\
+          "      - fleet-server\n"\
+          "      - localhost\n"\
+          "    ip:\n"\
+          "      - 127.0.0.1\n"\
+          > config/certs/instances.yml;
+          bin/elasticsearch-certutil cert --silent --pem -out config/certs/certs.zip --in config/certs/instances.yml --ca-cert config/certs/ca/ca.crt --ca-key config/certs/ca/ca.key;
+          unzip config/certs/certs.zip -d config/certs;
+        fi;
+        echo "Setting file permissions"
+        chown -R root:root config/certs;
+        find . -type d -exec chmod 750 \{\} \;;
+        find . -type f -exec chmod 640 \{\} \;;
+        echo "Waiting for Elasticsearch availability";
+        until curl -s --cacert config/certs/ca/ca.crt https://es01:9200 | grep -q "missing authentication credentials"; do sleep 30; done;
+        echo "Setting kibana_system password";
+        until curl -s -X POST --cacert config/certs/ca/ca.crt -u "elastic:${ELASTIC_PASSWORD}" -H "Content-Type: application/json" https://es01:9200/_security/user/kibana_system/_password -d "{\"password\":\"${KIBANA_PASSWORD}\"}" | grep -q "^{}"; do sleep 10; done;
+        echo "All done!";
+      '
+    healthcheck:
+      test: ["CMD-SHELL", "[ -f config/certs/es01/es01.crt ]"]
+      interval: 1s
+      timeout: 5s
+      retries: 120
+
+  # ---------------------------------------------------------------------------
+  # es01: single-node Elasticsearch with TLS + security enabled.
+  # ---------------------------------------------------------------------------
+  es01:
+    depends_on:
+      setup:
+        condition: service_healthy
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    restart: unless-stopped
+    labels:
+      co.elastic.logs/module: elasticsearch
+    volumes:
+      - certs:/usr/share/elasticsearch/config/certs
+      - esdata01:/usr/share/elasticsearch/data
+    ports:
+      - ${ES_PORT}:9200
+    environment:
+      - node.name=es01
+      - cluster.name=${CLUSTER_NAME}
+      - discovery.type=single-node
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - bootstrap.memory_lock=true
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=true
+      - xpack.security.http.ssl.key=certs/es01/es01.key
+      - xpack.security.http.ssl.certificate=certs/es01/es01.crt
+      - xpack.security.http.ssl.certificate_authorities=certs/ca/ca.crt
+      - xpack.security.transport.ssl.enabled=true
+      - xpack.security.transport.ssl.key=certs/es01/es01.key
+      - xpack.security.transport.ssl.certificate=certs/es01/es01.crt
+      - xpack.security.transport.ssl.certificate_authorities=certs/ca/ca.crt
+      - xpack.security.transport.ssl.verification_mode=certificate
+      - xpack.license.self_generated.type=${LICENSE}
+    mem_limit: ${ES_MEM_LIMIT}
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -s --cacert config/certs/ca/ca.crt https://localhost:9200 | grep -q 'missing authentication credentials'",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 120
+
+  # ---------------------------------------------------------------------------
+  # kibana: UI + Fleet management. Fleet preconfig lives in kibana.yml.
+  # ---------------------------------------------------------------------------
+  kibana:
+    depends_on:
+      es01:
+        condition: service_healthy
+    image: docker.elastic.co/kibana/kibana:${STACK_VERSION}
+    restart: unless-stopped
+    labels:
+      co.elastic.logs/module: kibana
+    volumes:
+      - certs:/usr/share/kibana/config/certs
+      - kibanadata:/usr/share/kibana/data
+      - ./kibana.yml:/usr/share/kibana/config/kibana.yml:ro
+    ports:
+      - ${KIBANA_PORT}:5601
+    environment:
+      - SERVERNAME=kibana
+      - ELASTICSEARCH_HOSTS=https://es01:9200
+      - ELASTICSEARCH_USERNAME=kibana_system
+      - ELASTICSEARCH_PASSWORD=${KIBANA_PASSWORD}
+      - ELASTICSEARCH_SSL_CERTIFICATEAUTHORITIES=config/certs/ca/ca.crt
+      - XPACK_SECURITY_ENCRYPTIONKEY=${ENCRYPTION_KEY}
+      - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=${ENCRYPTION_KEY}
+      - XPACK_REPORTING_ENCRYPTIONKEY=${ENCRYPTION_KEY}
+      - XPACK_REPORTING_KIBANASERVER_HOSTNAME=localhost
+      - SERVER_SSL_ENABLED=true
+      - SERVER_SSL_CERTIFICATE=config/certs/kibana/kibana.crt
+      - SERVER_SSL_KEY=config/certs/kibana/kibana.key
+      - SERVER_SSL_CERTIFICATEAUTHORITIES=config/certs/ca/ca.crt
+    mem_limit: ${KB_MEM_LIMIT}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -I -s --cacert config/certs/ca/ca.crt https://localhost:5601 | grep -q 'HTTP/1.1 302 Found'",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 120
+
+  # ---------------------------------------------------------------------------
+  # fleet-server: Elastic Agent in Fleet Server mode. Phase 2 integrations
+  # (NetFlow, Zeek) attach to agent policies managed through here.
+  # ---------------------------------------------------------------------------
+  fleet-server:
+    depends_on:
+      kibana:
+        condition: service_healthy
+      es01:
+        condition: service_healthy
+    image: docker.elastic.co/beats/elastic-agent:${STACK_VERSION}
+    restart: unless-stopped
+    volumes:
+      - certs:/certs
+      - fleetserverdata:/usr/share/elastic-agent
+      - "/var/lib/docker/containers:/var/lib/docker/containers:ro"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "/sys/fs/cgroup:/hostfs/sys/fs/cgroup:ro"
+      - "/proc:/hostfs/proc:ro"
+      - "/:/hostfs:ro"
+      # Zeek logs (read-only): the Zeek integration's default base_paths include
+      # /opt/zeek/logs/current, so no per-stream path overrides are needed.
+      - "zeeklogs:/opt/zeek/logs/current:ro"
+    ports:
+      - ${FLEET_PORT}:8220
+      - ${NETFLOW_PORT}:2055/udp
+      - ${DNS_SYSLOG_PORT}:5145/udp
+    user: root
+    environment:
+      - SSL_CERTIFICATE_AUTHORITIES=/certs/ca/ca.crt
+      - CERTIFICATE_AUTHORITIES=/certs/ca/ca.crt
+      - FLEET_CA=/certs/ca/ca.crt
+      - FLEET_ENROLL=1
+      - FLEET_INSECURE=true
+      - FLEET_SERVER_ELASTICSEARCH_CA=/certs/ca/ca.crt
+      - FLEET_SERVER_ELASTICSEARCH_HOST=https://es01:9200
+      - FLEET_SERVER_ELASTICSEARCH_INSECURE=true
+      - FLEET_SERVER_ENABLE=1
+      - FLEET_SERVER_CERT=/certs/fleet-server/fleet-server.crt
+      - FLEET_SERVER_CERT_KEY=/certs/fleet-server/fleet-server.key
+      - FLEET_SERVER_INSECURE_HTTP=true
+      - FLEET_SERVER_POLICY_ID=fleet-server-policy
+      - FLEET_URL=https://fleet-server:8220
+      - KIBANA_FLEET_CA=/certs/ca/ca.crt
+      - KIBANA_FLEET_SETUP=1
+      - KIBANA_FLEET_USERNAME=elastic
+      - KIBANA_FLEET_PASSWORD=${ELASTIC_PASSWORD}
+      - KIBANA_HOST=https://kibana:5601
+
+  # ---------------------------------------------------------------------------
+  # kibana-ts: Tailscale sidecar giving Kibana its own tailnet node + URL:
+  #   https://kibana.dikdik-macaroni.ts.net  (tailnet-only, valid LE cert).
+  # Shares kibana's network namespace, so it proxies to 127.0.0.1:5601 (Kibana's
+  # own TLS port -> https+insecure). Independent of the host's `tailscale serve`.
+  # ---------------------------------------------------------------------------
+  kibana-ts:
+    depends_on:
+      kibana:
+        condition: service_healthy
+    image: tailscale/tailscale:latest
+    restart: unless-stopped
+    network_mode: service:kibana
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY:?set TS_AUTHKEY in .env}
+      - TS_HOSTNAME=kibana
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=true
+      - TS_SERVE_CONFIG=/config/kibana-serve.json
+    volumes:
+      - kibanatsdata:/var/lib/tailscale
+      - ./tailscale/kibana-serve.json:/config/kibana-serve.json:ro
+
+  # ---------------------------------------------------------------------------
+  # zeek: protocol-level visibility (Phase 3.5). MikroTik /tool sniffer streams
+  # TZSP (UDP 37008) here; tzsp2pcap decapsulates it into a pcap stream piped to
+  # `zeek -r -` (offline reader on a never-ending pipe = pseudo-live source).
+  # Zeek writes ECS-friendly JSON logs to the shared `zeeklogs` volume, which
+  # fleet-server tails. Built from ./zeek (image bundles tzsp2pcap). pipefail so
+  # the container dies (and restarts) if either side of the pipe exits.
+  # ---------------------------------------------------------------------------
+  zeek:
+    build: ./zeek
+    restart: unless-stopped
+    ports:
+      - ${TZSP_PORT}:37008/udp
+    volumes:
+      - zeeklogs:/logs
+      # Bind-mount the site script so edits take effect on `restart` (no rebuild).
+      - ./zeek/local-elk.zeek:/usr/local/zeek/share/zeek/site/local-elk.zeek:ro
+    working_dir: /logs
+    entrypoint: ["/bin/bash", "-o", "pipefail", "-c"]
+    command:
+      - |
+        echo "zeek: tzsp2pcap(udp/37008) | zeek -r - (JSON) -> /logs";
+        # Sweeper: delete ROTATED logs (filename contains the rotation timestamp,
+        # e.g. conn-25-06-20_22.00.00.log) older than 120 min. Active files
+        # (conn.log, dns.log, ...) have no digits in the name, so are never hit.
+        # 120 min >> the agent's read+close window, so nothing is deleted unread.
+        ( while true; do
+            find /logs -regextype posix-egrep -regex '.*/[^/]*[0-9][^/]*\.log' -mmin +120 -delete 2>/dev/null;
+            sleep 600;
+          done ) &
+        tzsp2pcap -f | zeek -C -r - local local-elk
+
+  # ---------------------------------------------------------------------------
+  # enrich-refresh: periodically re-executes the `dns-ip-to-domain` enrich
+  # policy (Phase 3 IP->domain enrichment). The `mikrotik-dns-latest` transform
+  # keeps the source (latest domain per IP) fresh continuously, but an enrich
+  # index is a point-in-time snapshot — without periodic _execute it goes stale
+  # and new flows stop gaining destination.domain. Watcher isn't in the Basic
+  # license, so this tiny sidecar is the scheduler. Reuses the already-pulled ES
+  # image (entrypoint overridden -> it does NOT run a node, just curl + sleep).
+  # ---------------------------------------------------------------------------
+  enrich-refresh:
+    depends_on:
+      es01:
+        condition: service_healthy
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    restart: unless-stopped
+    volumes:
+      - certs:/certs:ro
+    environment:
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        echo "enrich-refresh: re-executing dns-ip-to-domain + zeek-dns-ip-to-domain every 300s";
+        while true; do
+          for p in dns-ip-to-domain zeek-dns-ip-to-domain; do
+            curl -s --cacert /certs/ca/ca.crt -u "elastic:$${ELASTIC_PASSWORD}" \
+              -X POST "https://es01:9200/_enrich/policy/$${p}/_execute" >/dev/null 2>&1 || true;
+          done;
+          sleep 300;
+        done

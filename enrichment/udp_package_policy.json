@@ -1,0 +1,24 @@
+{
+  "_comment": "Custom UDP Logs (input package 'udp') receiving RouterOS dns,packet remote syslog on UDP 5145. Created via Fleet API simplified format: POST /api/fleet/package_policies. INPUT-PACKAGE GOTCHA: the verbose inputs[] format fails with 'Stream template not found' for input packages on 8.19; the simplified format works and the stream key MUST be 'udp.udp'. data_stream.dataset var overrides the index -> logs-mikrotik_dns-default. pipeline var runs our parse pipeline.",
+  "name": "mikrotik-dns-1",
+  "namespace": "default",
+  "description": "RouterOS dns,packet remote syslog on UDP 5145 -> A-record parse for IP->domain enrichment.",
+  "policy_id": "fleet-server-policy",
+  "package": { "name": "udp", "version": "2.2.1" },
+  "inputs": {
+    "udp-udp": {
+      "enabled": true,
+      "streams": {
+        "udp.udp": {
+          "enabled": true,
+          "vars": {
+            "listen_address": "0.0.0.0",
+            "listen_port": "5145",
+            "data_stream.dataset": "mikrotik_dns",
+            "pipeline": "mikrotik-dns-parse"
+          }
+        }
+      }
+    }
+  }
+}

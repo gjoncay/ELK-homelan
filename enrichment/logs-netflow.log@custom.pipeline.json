@@ -1,0 +1,79 @@
+{
+  "description": "Custom hook for the managed netflow ingest pipeline (logs-netflow.log@custom). Enriches destination.ip and source.ip with the latest known domain. PRIMARY source = Zeek dns.log (enrich policy zeek-dns-ip-to-domain); FALLBACK = MikroTik dns,packet syslog (enrich policy dns-ip-to-domain), used only when Zeek has no domain for that IP. Upgrade-safe: the managed pipeline calls this @custom pipeline; package upgrades do not overwrite it.",
+  "processors": [
+    {
+      "enrich": {
+        "policy_name": "zeek-dns-ip-to-domain",
+        "field": "destination.ip",
+        "target_field": "_zdns_dst",
+        "max_matches": 1,
+        "ignore_missing": true
+      }
+    },
+    {
+      "set": {
+        "field": "destination.domain",
+        "copy_from": "_zdns_dst.domain",
+        "if": "ctx._zdns_dst != null",
+        "ignore_empty_value": true
+      }
+    },
+    {
+      "enrich": {
+        "policy_name": "dns-ip-to-domain",
+        "field": "destination.ip",
+        "target_field": "_dns_dst",
+        "max_matches": 1,
+        "ignore_missing": true
+      }
+    },
+    {
+      "set": {
+        "field": "destination.domain",
+        "copy_from": "_dns_dst.domain",
+        "if": "ctx._dns_dst != null && ctx.destination?.domain == null",
+        "ignore_empty_value": true
+      }
+    },
+    {
+      "enrich": {
+        "policy_name": "zeek-dns-ip-to-domain",
+        "field": "source.ip",
+        "target_field": "_zdns_src",
+        "max_matches": 1,
+        "ignore_missing": true
+      }
+    },
+    {
+      "set": {
+        "field": "source.domain",
+        "copy_from": "_zdns_src.domain",
+        "if": "ctx._zdns_src != null",
+        "ignore_empty_value": true
+      }
+    },
+    {
+      "enrich": {
+        "policy_name": "dns-ip-to-domain",
+        "field": "source.ip",
+        "target_field": "_dns_src",
+        "max_matches": 1,
+        "ignore_missing": true
+      }
+    },
+    {
+      "set": {
+        "field": "source.domain",
+        "copy_from": "_dns_src.domain",
+        "if": "ctx._dns_src != null && ctx.source?.domain == null",
+        "ignore_empty_value": true
+      }
+    },
+    {
+      "remove": {
+        "field": ["_zdns_dst", "_dns_dst", "_zdns_src", "_dns_src"],
+        "ignore_missing": true
+      }
+    }
+  ]
+}

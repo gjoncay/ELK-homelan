@@ -1,0 +1,9 @@
+{
+  "description": "Latest domain seen per resolved IP, from MikroTik DNS A-record logs. Entity-centric source for the dns-ip-to-domain enrich policy (deterministic 'most recent domain for this IP').",
+  "source": { "index": ["logs-mikrotik_dns-*"] },
+  "dest": { "index": "mikrotik-dns-latest" },
+  "latest": { "unique_key": ["resolved_ip"], "sort": "@timestamp" },
+  "frequency": "1m",
+  "sync": { "time": { "field": "@timestamp", "delay": "60s" } },
+  "settings": { "max_page_search_size": 500 }
+}

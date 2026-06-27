@@ -1,0 +1,44 @@
+server.host: "0.0.0.0"
+telemetry.enabled: "true"
+
+# Fleet default output. The stock default is http://localhost:9200, which is
+# wrong for this stack (ES is https + TLS at es01:9200 on the elastic network).
+# CA path is resolved inside the elastic-agent container (certs:/certs mount).
+# Applied live via the Fleet API; persisted here so a clean rebuild is correct.
+xpack.fleet.outputs:
+  - id: fleet-default-output
+    name: default
+    type: elasticsearch
+    hosts: ["https://es01:9200"]
+    is_default: true
+    is_default_monitoring: true
+    ssl:
+      certificate_authorities: ["/certs/ca/ca.crt"]
+
+# Fleet packages installed automatically on startup.
+xpack.fleet.packages:
+  - name: fleet_server
+    version: latest
+  - name: system
+    version: latest
+  - name: elastic_agent
+    version: latest
+
+# Preconfigured agent policy for the Fleet Server itself.
+xpack.fleet.agentPolicies:
+  - name: Fleet-Server-Policy
+    id: fleet-server-policy
+    namespace: default
+    monitoring_enabled:
+      - logs
+      - metrics
+    package_policies:
+      - name: fleet_server-1
+        package:
+          name: fleet_server
+      - name: system-1
+        package:
+          name: system
+      - name: elastic_agent-1
+        package:
+          name: elastic_agent

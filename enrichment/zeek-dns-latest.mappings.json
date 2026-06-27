@@ -1,0 +1,9 @@
+{
+  "mappings": {
+    "properties": {
+      "resolved_ip": { "type": "ip" },
+      "domain":      { "type": "keyword" },
+      "last_seen":   { "type": "date" }
+    }
+  }
+}

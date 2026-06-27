@@ -1,0 +1,60 @@
+{
+  "description": "Parse RouterOS 'dns,packet' syslog lines. Keep only A-record answers (<name.:A:ttl=ipv4>), which give a direct domain->IP mapping; drop questions, headers, AAAA (hex), CNAME, SOA, authority. Output { resolved_ip, domain } for IP->domain enrichment of netflow.",
+  "processors": [
+    {
+      "grok": {
+        "field": "message",
+        "patterns": [
+          "<(?<domain>[A-Za-z0-9._-]+):A:%{INT:dns_ttl}=%{IP:resolved_ip}>"
+        ],
+        "ignore_failure": true
+      }
+    },
+    {
+      "drop": {
+        "if": "ctx.resolved_ip == null"
+      }
+    },
+    {
+      "gsub": {
+        "field": "domain",
+        "pattern": "\\.$",
+        "replacement": "",
+        "ignore_missing": true
+      }
+    },
+    {
+      "lowercase": {
+        "field": "domain",
+        "ignore_missing": true
+      }
+    },
+    {
+      "convert": {
+        "field": "resolved_ip",
+        "type": "ip",
+        "ignore_missing": true
+      }
+    },
+    {
+      "remove": {
+        "field": ["dns_ttl"],
+        "ignore_missing": true
+      }
+    },
+    {
+      "set": {
+        "field": "event.kind",
+        "value": "enrichment"
+      }
+    }
+  ],
+  "on_failure": [
+    {
+      "set": {
+        "field": "error.message",
+        "value": "{{ _ingest.on_failure_message }}"
+      }
+    }
+  ]
+}

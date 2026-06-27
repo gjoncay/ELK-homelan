@@ -1,0 +1,6 @@
+{
+  "description": "Reshape the zeek-dns-latest transform output: top_metrics emits the queried name as a single dotted key `domain['dns.question.name']`. Replace the domain object with that string so the enrich policy can use a top-level keyword `domain`.",
+  "processors": [
+    { "script": { "lang": "painless", "source": "if (ctx.domain instanceof Map) { ctx.domain = ctx.domain.get('dns.question.name'); }" } }
+  ]
+}

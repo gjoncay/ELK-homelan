@@ -1,0 +1,7 @@
+{
+  "match": {
+    "indices": "zeek-dns-latest",
+    "match_field": "resolved_ip",
+    "enrich_fields": ["domain"]
+  }
+}

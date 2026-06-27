@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker compose *)",
+      "Bash(docker info *)",
+      "Bash(docker --version)",
+      "Bash(sysctl -n vm.max_map_count)",
+      "Bash(echo \"vm.max_map_count = $\\(sysctl -n vm.max_map_count 2>/dev/null\\)\")",
+      "WebSearch"
+    ]
+  }
+}
